@@ -1,22 +1,25 @@
 # Get-LAPS-pass
 
-Get-LAPS-pass is a PowerShell script designed to streamline the process of retrieving and utilizing Local Administrator Password Solution (LAPS) passwords. The script provides a user-friendly graphical interface (GUI) for inputting hostnames, retrieving passwords, and connecting to remote systems using Remote Desktop Protocol (RDP).
+**Get-LAPS-pass** is a PowerShell script designed to streamline the process of retrieving and utilizing Local Administrator Password Solution (LAPS) passwords. The script provides a user-friendly graphical interface (GUI) for inputting hostnames, retrieving passwords, and connecting to remote systems using Remote Desktop Protocol (RDP).
 
-## Features
+## 🛠️ Features
 
-- **Retrieve LAPS Passwords**: Enter a hostname and retrieve the associated LAPS-managed local administrator password.
-- **Password Display**: View the retrieved password directly in the GUI.
-- **Copy to Clipboard**: Copy the retrieved password to your clipboard with a single click.
-- **RDP Connection**: Establish an RDP connection to the specified hostname with the retrieved credentials.
-- **Error Handling**: Displays error messages in case of issues during password retrieval.
+- 🔍 **Retrieve LAPS Passwords** by entering a hostname.
+- 🔐 **Display the password** in a read-only field within the GUI.
+- 📋 **Copy password to clipboard** with a single click.
+- 💻 **Connect via RDP** using the retrieved credentials.
+- 📁 **Redirect C:\\ drive** during RDP (enabled by default).
+- ❌ **Error handling** for password lookup and connectivity issues.
+- 🌐 **DNS name resolution check** before launching the RDP session.
+- ⌨️ **Keyboard shortcuts**: Press Enter to start, Escape to exit.
 
-## Prerequisites
+## 📦 Prerequisites
 
-1. **Windows Environment**: The script is designed to run on Windows.
-2. **PowerShell**: Ensure PowerShell is installed and up-to-date.
+1. **Windows environment** — this script is intended for Windows.
+2. **PowerShell 5.1 or later**
 3. **LAPS Module**: The script uses the `Get-LapsADPassword` cmdlet, which requires the LAPS PowerShell module to be installed.
-4. **Permissions**: The user running the script must have appropriate permissions to retrieve LAPS passwords.
-5. **Config File**: A `config.json` file in the same directory as the script, with the following structure:
+4. **Permission to read LAPS passwords** in Active Directory.
+5. A configuration file named `config.json` in the same directory:
    ```json
    {
        "SearchTemplate": "template-hostname",
@@ -24,78 +27,77 @@ Get-LAPS-pass is a PowerShell script designed to streamline the process of retri
    }
    ```
 
-## Installation
+## 🚀 Installation
 
-1. Clone this repository or download the script and executable:
+1. Clone the repository or download the script:
    ```sh
    git clone https://github.com/yourusername/Get-LAPS-pass.git
    ```
-2. Ensure the required `config.json` file is present in the script's directory.
+2. Ensure `config.json` is located in the same folder as the script.
 3. Install the LAPS PowerShell module if not already installed:
    ```powershell
    Install-Module -Name LAPS
    ```
 
-## Usage
+## ▶️ Usage
 
-1. Run the script in PowerShell:
-   ```powershell
-   .\Get-LAPS-pass.ps1
-   ```
-   Alternatively, you can use the precompiled executable file (`Get-LAPS-pass.exe`) for easier launching without opening PowerShell.
+Run the script:
+```powershell
+.\Get-LAPS-pass.ps1
+```
 
-2. In the GUI:
-   - Enter the hostname of the target computer.
-   - Click **Start** to retrieve the password.
-   - The password will be displayed in the password field.
-   - Optionally, click **Copy** to copy the password to your clipboard.
-   - Click **Connect!** to establish an RDP connection using the retrieved credentials.
+Or launch the precompiled executable (`Get-LAPS-pass.exe`) for easier use without opening PowerShell.
 
-3. Use the **Enter** key as a shortcut for the **Start** button or the **Escape** key to close the application.
+### In the GUI:
 
-## GUI Overview
+1. Enter the hostname of the target system.
+2. Click **Start** to retrieve the LAPS password.
+3. Click **Copy** to copy the password to the clipboard.
+4. Optionally, use the **Redirect C:\\** checkbox to control drive redirection.
+5. Click **Connect!** to start an RDP session using the retrieved credentials.
 
-- **Enter Hostname**: Input field for the target computer's hostname.
-- **Start**: Button to retrieve the LAPS password.
-- **Admin Password**: Field where the retrieved password is displayed.
-- **Copy**: Button to copy the password to your clipboard.
-- **Connect!**: Button to start an RDP session with the retrieved credentials.
+## 🖼️ GUI Overview
 
-### Screenshot
+- **Enter hostname** — Input field for the target system name.
+- **Start** — Button to retrieve the password.
+- **Admin Password** — Displays the retrieved password.
+- **Copy** — Copies the password to clipboard.
+- **Redirect C:\** — Enables/disables local drive redirection in the RDP session.
+- **Connect!** — Launches RDP with saved credentials.
 
-Below is a screenshot of the Get-LAPS-pass GUI:
+### 📸 Screenshot
 
 ![Get-LAPS-pass GUI](GUI.png)
 
-## Error Handling
+## ⚠️ Error Handling
 
-If an error occurs during password retrieval, the password field will display `Error`, and an appropriate message box will appear.
+- If the hostname cannot be resolved via DNS, an error message will appear.
+- If password retrieval fails, the password field will display `Error`.
 
-## Customization
+## 🔧 Configuration
 
-Modify the `config.json` file to customize the default hostname and username used for RDP connections:
-- `SearchTemplate`: Default hostname shown in the input field.
-- `UserForConnect`: Default username used in RDP connections.
+Customize behavior by editing `config.json`:
+- `SearchTemplate`: Default value shown in the hostname field.
+- `UserForConnect`: Default username for RDP (`hostname\username` format).
 
-## Limitations
+## 🚫 Limitations
 
-- The script assumes that the `Get-LapsADPassword` cmdlet is available and functional.
-- It relies on the `config.json` file for certain configurations.
-- Designed for use in environments where LAPS is implemented.
+- Requires the `Get-LapsADPassword` cmdlet to be installed and functional.
+- Designed for environments with Microsoft LAPS deployed.
+- The RDP file is created temporarily during each session.
 
-## License
+## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
 
-## Contributing
+## 🤝 Contributing
 
-Contributions are welcome! Feel free to submit issues or pull requests.
+Contributions are welcome! Feel free to open issues or submit pull requests.
 
-## Acknowledgments
+## 🙏 Acknowledgments
 
 - [Microsoft LAPS](https://www.microsoft.com/en-us/download/details.aspx?id=46899) for the password management solution.
 
-## Disclaimer
+## 📢 Disclaimer
 
-Use this script responsibly and ensure compliance with your organization's security policies.
-
+Use this tool responsibly and in accordance with your organization's security policies.

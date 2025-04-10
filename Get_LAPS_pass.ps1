@@ -1,123 +1,185 @@
-# Load the configuration file
+# Load configuration
 $config = Get-Content -Raw -Path "config.json" | ConvertFrom-Json
 
-# Import modules for working with Windows Forms
+# Load required .NET assemblies
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# Define the form
+# ──────── FUNCTIONS ────────
+
+function Get-LapsPassword {
+    param ([string]$hostname)
+    try {
+        return (Get-LapsADPassword $hostname -AsPlainText).Password
+    } catch {
+        return $null
+    }
+}
+
+function Validate-Hostname {
+    param ([string]$hostname)
+    try {
+        Resolve-DnsName -Name $hostname -ErrorAction Stop | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Connect-RDP {
+    param (
+        [string]$hostname,
+        [string]$password,
+        [bool]$redirectDrive
+    )
+
+    $user = "$hostname\$($config.UserForConnect)"
+    cmdkey /generic:"$hostname" /user:"$user" /pass:"$password"
+
+    if ($redirectDrive) {
+        $rdpFile = "$env:TEMP\$hostname.rdp"
+        $rdpContent = @"
+screen mode id:i:2
+use multimon:i:0
+session bpp:i:32
+winposstr:s:0,1,0,0,800,600
+compression:i:1
+keyboardhook:i:2
+audiomode:i:0
+redirectprinters:i:0
+redirectclipboard:i:1
+redirectsmartcards:i:1
+drivestoredirect:s:C:\
+full address:s:$hostname
+username:s:$user
+prompt for credentials:i:0
+authentication level:i:2
+enablecredsspsupport:i:1
+"@
+        $rdpContent | Set-Content -Path $rdpFile -Encoding Unicode
+        Start-Process -FilePath "mstsc.exe" -ArgumentList $rdpFile -Wait
+    } else {
+        Start-Process -FilePath "mstsc.exe" -ArgumentList "/v:$hostname", "/f" -Wait
+    }
+
+    cmdkey /delete:$hostname
+}
+
+# ──────── FORM DESIGN ────────
+
 $Form = New-Object System.Windows.Forms.Form
 $Form.ClientSize = '305,150'
 $Form.Text = "Get LAPS pass"
-$Form.TopMost = $false
-$Form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
-$Form.KeyPreview = $True
+$Form.FormBorderStyle = 'FixedSingle'
 $Form.StartPosition = "CenterScreen"
+$Form.KeyPreview = $true
+$Form.TopMost = $false
 
-$Form.Add_KeyDown({if ($PSItem.KeyCode -eq "Enter") 
-    {
-        $StartButton.PerformClick()
-    }
-})
-$Form.Add_KeyDown({if ($PSItem.KeyCode -eq "Escape") 
-    {
-        $Form.Close()
-    }
+# Enter/Escape key support
+$Form.Add_KeyDown({
+    if ($_.KeyCode -eq "Enter") { $StartButton.PerformClick() }
+    elseif ($_.KeyCode -eq "Escape") { $Form.Close() }
 })
 
-# Label for hostname input
-$Label = New-Object System.Windows.Forms.Label
-$Label.Text = "Enter hostname:"
-$Label.Location = New-Object System.Drawing.Point(20, 13)
+# Hostname label
+$Label = [System.Windows.Forms.Label]@{
+    Text = "Enter hostname:"
+    Location = New-Object System.Drawing.Point(20, 13)
+    Size = New-Object System.Drawing.Size(130, 20)
+    Font = New-Object System.Drawing.Font('Tahoma',12)
+}
 $Form.Controls.Add($Label)
-$Label.Size = New-Object System.Drawing.Size(130, 20)
-$Label.Font = New-Object System.Drawing.Font('Tahoma',12,[System.Drawing.FontStyle]::Regular)
 
-# Textbox for hostname input
-$InputTextbox = New-Object System.Windows.Forms.TextBox
-$InputTextbox.Location = New-Object System.Drawing.Point(150,10) 
-$InputTextbox.Size = New-Object System.Drawing.Size(135,25)
-$InputTextbox.Font = New-Object System.Drawing.Font('Tahoma',12,[System.Drawing.FontStyle]::Regular)
-$InputTextbox.Multiline = $false
-$InputTextbox.AcceptsReturn = $false
-$InputTextbox.AcceptsTab = $false
-$InputTextbox.TextAlign = [System.Windows.Forms.HorizontalAlignment]::Left
-$InputTextbox.Text = $config.SearchTemplate
+# Hostname textbox
+$InputTextbox = [System.Windows.Forms.TextBox]@{
+    Location = New-Object System.Drawing.Point(150,10)
+    Size = New-Object System.Drawing.Size(135,25)
+    Font = New-Object System.Drawing.Font('Tahoma',12)
+    Text = $config.SearchTemplate
+}
 $InputTextbox.SelectionStart = $InputTextbox.Text.Length
 $Form.Controls.Add($InputTextbox)
 
-# Button to start password retrieval
-$StartButton = New-Object System.Windows.Forms.Button
-$StartButton.Location = New-Object System.Drawing.Point(20,45)
-$StartButton.Size = New-Object System.Drawing.Size(120,26)
-$StartButton.Font = New-Object System.Drawing.Font('Tahoma',12,[System.Drawing.FontStyle]::Regular)
-$StartButton.Text = "Start"
+# Start button
+$StartButton = [System.Windows.Forms.Button]@{
+    Text = "Start"
+    Location = New-Object System.Drawing.Point(20,45)
+    Size = New-Object System.Drawing.Size(120,26)
+    Font = New-Object System.Drawing.Font('Tahoma',12)
+}
 $StartButton.Add_Click({
     $hostname = $InputTextbox.Text
-    try {
-        $PassOutput.Text = (Get-LapsADPassword $hostname -AsPlainText).Password
-    } catch {
-        $PassOutput.Text = "Error"
-    }
+    $password = Get-LapsPassword -hostname $hostname
+    $PassOutput.Text = if ($password) { $password } else { "Error" }
 })
 $Form.Controls.Add($StartButton)
 
-# Textbox for displaying the password
-$PassOutput = New-Object System.Windows.Forms.TextBox
-$PassOutput.Location = New-Object System.Drawing.Point(150,80)
-$PassOutput.Size = New-Object System.Drawing.Size(135,25)
-$PassOutput.ReadOnly = $true
-$PassOutput.Font = New-Object System.Drawing.Font('Tahoma',11,[System.Drawing.FontStyle]::Regular)
-$Form.Controls.Add($PassOutput)
-
-# Label for the password field (updated to a new name)
-$PassLabel = New-Object System.Windows.Forms.Label
-$PassLabel.Text = "Admin Password:"
-$PassLabel.Location = New-Object System.Drawing.Point(20,85)
-$PassLabel.Size = New-Object System.Drawing.Size(130, 25)
-$PassLabel.Font = New-Object System.Drawing.Font('Tahoma',11,[System.Drawing.FontStyle]::Regular)
-$Form.Controls.Add($PassLabel)
-
-# Button to copy the password
-$copyButton = New-Object System.Windows.Forms.Button
-$copyButton.Location = New-Object System.Drawing.Point(150,45)
-$copyButton.Size = New-Object System.Drawing.Size(135,26)
-$copyButton.Text = "Copy"
-$copyButton.Font = New-Object System.Drawing.Font('Tahoma',12,[System.Drawing.FontStyle]::Regular)
-$copyButton.Add_Click({
-    $PassOutput.Text | clip
-})
+# Copy button
+$copyButton = [System.Windows.Forms.Button]@{
+    Text = "Copy"
+    Location = New-Object System.Drawing.Point(150,45)
+    Size = New-Object System.Drawing.Size(135,26)
+    Font = New-Object System.Drawing.Font('Tahoma',12)
+}
+$copyButton.Add_Click({ $PassOutput.Text | clip })
 $Form.Controls.Add($copyButton)
 
-# Button to connect
-$ConnectButton = New-Object System.Windows.Forms.Button
-$ConnectButton.Location = New-Object System.Drawing.Point(20,112)
-$ConnectButton.Size = New-Object System.Drawing.Size(265,26)
-$ConnectButton.Font = New-Object System.Drawing.Font('Tahoma',14,[System.Drawing.FontStyle]::Regular)
-$ConnectButton.Text = "Connect!"
+# Password label
+$PassLabel = [System.Windows.Forms.Label]@{
+    Text = "Admin Password:"
+    Location = New-Object System.Drawing.Point(20,85)
+    Size = New-Object System.Drawing.Size(130, 25)
+    Font = New-Object System.Drawing.Font('Tahoma',11)
+}
+$Form.Controls.Add($PassLabel)
+
+# Password output textbox
+$PassOutput = [System.Windows.Forms.TextBox]@{
+    ReadOnly = $true
+    Location = New-Object System.Drawing.Point(150,80)
+    Size = New-Object System.Drawing.Size(135,25)
+    Font = New-Object System.Drawing.Font('Tahoma',11)
+}
+$Form.Controls.Add($PassOutput)
+
+# Drive redirection checkbox
+$EnableDriveCheckbox = [System.Windows.Forms.CheckBox]@{
+    Text = "Redirect C:\"
+    Checked = $true
+    Location = New-Object System.Drawing.Point(23, 115)
+    Size = New-Object System.Drawing.Size(120, 20)
+    Font = New-Object System.Drawing.Font('Tahoma',11)
+}
+$Form.Controls.Add($EnableDriveCheckbox)
+
+# Connect button
+$ConnectButton = [System.Windows.Forms.Button]@{
+    Text = "Connect!"
+    Location = New-Object System.Drawing.Point(150,112)
+    Size = New-Object System.Drawing.Size(135,26)
+    Font = New-Object System.Drawing.Font('Tahoma',12)
+}
 $ConnectButton.Add_Click({
     $hostname = $InputTextbox.Text
 
-    # If the password has not been retrieved yet, retrieve it first
-    if ([string]::IsNullOrEmpty($PassOutput.Text) -or $PassOutput.Text -eq "Error") {
-        try {
-            $PassOutput.Text = (Get-LapsADPassword $hostname -AsPlainText).Password
-        } catch {
-            $PassOutput.Text = "Error"
-        }
+    if (-not $PassOutput.Text -or $PassOutput.Text -eq "Error") {
+        $PassOutput.Text = Get-LapsPassword -hostname $hostname
     }
 
-    if ($PassOutput.Text -ne "Error") {
-        $userforconnect = "$hostname\$($config.UserForConnect)"
-        $passforconnect = $PassOutput.Text
-        cmdkey /generic:"$hostname" /user:"$userforconnect" /pass:"$passforconnect"
-        Start-Process -FilePath "mstsc.exe" -ArgumentList "/v:$hostname","/f" -Wait
-        cmdkey /delete:$hostname
-    } else {
-        [System.Windows.Forms.MessageBox]::Show("Unable to retrieve password.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    if ($PassOutput.Text -eq "Error" -or -not $PassOutput.Text) {
+        [System.Windows.Forms.MessageBox]::Show("Unable to retrieve password.","Error","OK","Error")
+        return
     }
+
+    if (-not (Validate-Hostname -hostname $hostname)) {
+        [System.Windows.Forms.MessageBox]::Show("Hostname '$hostname' not found in DNS.","Connection Error","OK","Error")
+        return
+    }
+
+    Connect-RDP -hostname $hostname -password $PassOutput.Text -redirectDrive $EnableDriveCheckbox.Checked
 })
 $Form.Controls.Add($ConnectButton)
 
+# Activate and show form
 $Form.Add_Shown({$Form.Activate()})
 [void] $Form.ShowDialog()
