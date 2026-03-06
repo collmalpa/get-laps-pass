@@ -52,7 +52,7 @@ This tool reduces the workflow to:
 Clone the repository:
 
 ```bash
-git clone https://github.com/collmalpa/get-laps-pass.git
+git clone https://github.com/collmalpa/laps-password-rdp-tool.git
 ````
 
 Or download the latest release and run the compiled executable.
