@@ -358,18 +358,10 @@ function Connect-RDP {
             return
         }
 
-        $credentialMarker = 'Get-LAPS-pass:{0}' -f [guid]::NewGuid().ToString('D')
-
-        [LapsRdpCredentialManager]::WriteTemporaryGenericCredential(
-            $credentialTarget,
-            $user,
-            $password,
-            $credentialMarker)
-
-        if ($redirectDrive) {
-            $rdpFileName = '{0}.rdp' -f [guid]::NewGuid().ToString('N')
-            $rdpFile = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath $rdpFileName
-            $rdpContent = @"
+        $driveStoreRedirect = if ($redirectDrive) { 'C:\;' } else { '' }
+        $rdpFileName = '{0}.rdp' -f [guid]::NewGuid().ToString('N')
+        $rdpFile = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath $rdpFileName
+        $rdpContent = @"
 screen mode id:i:2
 use multimon:i:0
 session bpp:i:32
@@ -379,23 +371,28 @@ keyboardhook:i:2
 audiomode:i:0
 redirectprinters:i:0
 redirectclipboard:i:1
-redirectsmartcards:i:1
-drivestoredirect:s:C:\
+redirectsmartcards:i:0
+drivestoredirect:s:$driveStoreRedirect
 full address:s:$hostname
 username:s:$user
 prompt for credentials:i:0
 authentication level:i:2
 enablecredsspsupport:i:1
 "@
-            [System.IO.File]::WriteAllText(
-                $rdpFile,
-                $rdpContent,
-                [System.Text.Encoding]::Unicode)
-            $rdpFileArgument = '"{0}"' -f $rdpFile
-            Start-Process -FilePath "mstsc.exe" -ArgumentList $rdpFileArgument -Wait -ErrorAction Stop
-        } else {
-            Start-Process -FilePath "mstsc.exe" -ArgumentList "/v:$hostname", "/f" -Wait -ErrorAction Stop
-        }
+        [System.IO.File]::WriteAllText(
+            $rdpFile,
+            $rdpContent,
+            [System.Text.Encoding]::Unicode)
+        $rdpFileArgument = '"{0}"' -f $rdpFile
+
+        $credentialMarker = 'Get-LAPS-pass:{0}' -f [guid]::NewGuid().ToString('D')
+        [LapsRdpCredentialManager]::WriteTemporaryGenericCredential(
+            $credentialTarget,
+            $user,
+            $password,
+            $credentialMarker)
+
+        Start-Process -FilePath "mstsc.exe" -ArgumentList $rdpFileArgument -Wait -ErrorAction Stop
     } finally {
         if ($null -ne $credentialMarker) {
             $currentCredentialMetadata = $null
