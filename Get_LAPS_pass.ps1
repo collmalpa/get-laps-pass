@@ -255,6 +255,19 @@ $applicationDirectory = if ($PSScriptRoot) {
 } else {
     [System.AppDomain]::CurrentDomain.BaseDirectory
 }
+
+$coreModulePath = Join-Path -Path $applicationDirectory -ChildPath 'GetLapsPass.Core.psm1'
+try {
+    Import-Module -Name $coreModulePath -ErrorAction Stop
+} catch {
+    [void][System.Windows.Forms.MessageBox]::Show(
+        "Unable to initialize the Get-LAPS-pass core module. Ensure GetLapsPass.Core.psm1 exists beside the application.",
+        "Startup Error",
+        "OK",
+        "Error")
+    return
+}
+
 $configPath = Join-Path -Path $applicationDirectory -ChildPath 'config.json'
 
 try {
@@ -265,15 +278,7 @@ try {
     $config = Get-Content -Raw -LiteralPath $configPath -ErrorAction Stop |
         ConvertFrom-Json -ErrorAction Stop
 
-    $configPropertyNames = @($config.PSObject.Properties.Name)
-    if (
-        $null -eq $config -or
-        $configPropertyNames -notcontains 'SearchTemplate' -or
-        $configPropertyNames -notcontains 'UserForConnect' -or
-        -not ($config.SearchTemplate -is [string]) -or
-        -not ($config.UserForConnect -is [string]) -or
-        [string]::IsNullOrWhiteSpace($config.UserForConnect)
-    ) {
+    if (-not (Test-GetLapsPassConfiguration -Configuration $config)) {
         throw (New-Object System.FormatException)
     }
 } catch {
@@ -286,80 +291,6 @@ try {
 }
 
 # ──────── FUNCTIONS ────────
-
-function Get-LapsErrorMessage {
-    param ([string]$category)
-
-    switch ($category) {
-        'ModuleUnavailable' {
-            return "The Windows LAPS PowerShell module is unavailable."
-        }
-        'ComputerNotFound' {
-            return "The computer was not found in Active Directory."
-        }
-        'AccessDenied' {
-            return "You are not authorized to read or decrypt this LAPS password."
-        }
-        'PasswordUnavailable' {
-            return "The LAPS password is unavailable or could not be decrypted."
-        }
-        default {
-            return "An unexpected error occurred while retrieving the LAPS credential."
-        }
-    }
-}
-
-function New-LapsRetrievalException {
-    param ([string]$category)
-
-    $exception = New-Object System.InvalidOperationException(
-        (Get-LapsErrorMessage -category $category))
-    $exception.Data['LapsErrorCategory'] = $category
-    return $exception
-}
-
-function Get-LapsExceptionCategory {
-    param ([System.Management.Automation.ErrorRecord]$errorRecord)
-
-    $exception = $errorRecord.Exception
-    while ($null -ne $exception) {
-        $exceptionTypeName = $exception.GetType().FullName
-        if ($exceptionTypeName -eq 'System.Management.Automation.CommandNotFoundException') {
-            return 'ModuleUnavailable'
-        }
-        if ($exceptionTypeName -eq 'Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException') {
-            return 'ComputerNotFound'
-        }
-        if (
-            $exception -is [System.UnauthorizedAccessException] -or
-            $exception -is [System.Security.SecurityException] -or
-            $exception.HResult -eq -2147024891
-        ) {
-            return 'AccessDenied'
-        }
-
-        $exception = $exception.InnerException
-    }
-
-    $errorCategory = [string]$errorRecord.CategoryInfo.Category
-    switch ($errorCategory) {
-        'ObjectNotFound' {
-            return 'ComputerNotFound'
-        }
-        'PermissionDenied' {
-            return 'AccessDenied'
-        }
-        'SecurityError' {
-            return 'AccessDenied'
-        }
-    }
-
-    if ($errorRecord.FullyQualifiedErrorId -eq 'CommandNotFoundException') {
-        return 'ModuleUnavailable'
-    }
-
-    return 'Unexpected'
-}
 
 function Show-LapsRetrievalError {
     param ([System.Management.Automation.ErrorRecord]$errorRecord)
@@ -405,61 +336,10 @@ function Get-LapsCredential {
         throw (New-LapsRetrievalException -category $category)
     }
 
-    if ($lapsResults.Count -eq 0) {
-        throw (New-LapsRetrievalException -category 'ComputerNotFound')
-    }
-    if ($lapsResults.Count -ne 1) {
-        throw (New-LapsRetrievalException -category 'Unexpected')
-    }
-
-    $lapsResult = $lapsResults[0]
-    $decryptionStatus = [string]$lapsResult.DecryptionStatus
-    if ($decryptionStatus -eq 'Unauthorized') {
-        throw (New-LapsRetrievalException -category 'AccessDenied')
-    }
-    if ($decryptionStatus -notin @('Success', 'NotApplicable')) {
-        throw (New-LapsRetrievalException -category 'PasswordUnavailable')
-    }
-    if ([string]::IsNullOrEmpty([string]$lapsResult.Password)) {
-        throw (New-LapsRetrievalException -category 'PasswordUnavailable')
-    }
-
-    $lapsAccount = [string]$lapsResult.Account
-    if ([string]::IsNullOrWhiteSpace($lapsAccount)) {
-        $rdpAccount = $config.UserForConnect.Trim()
-        $accountSource = 'ConfigFallback'
-    } else {
-        $rdpAccount = $lapsAccount.Trim()
-        $accountSource = 'LAPS'
-    }
-
-    return [pscustomobject]@{
-        RequestedHostname = $hostname
-        LapsResult = $lapsResult
-        RdpAccount = $rdpAccount
-        AccountSource = $accountSource
-        ExpirationTimestamp = $lapsResult.ExpirationTimestamp
-    }
-}
-
-function Get-ClipboardTextFingerprint {
-    param ([string]$text)
-
-    $textBytes = $null
-    $sha256 = $null
-    try {
-        $textBytes = [System.Text.Encoding]::UTF8.GetBytes($text)
-        $sha256 = [System.Security.Cryptography.SHA256]::Create()
-        $fingerprint = $sha256.ComputeHash($textBytes)
-        return ,$fingerprint
-    } finally {
-        if ($null -ne $textBytes) {
-            [System.Array]::Clear($textBytes, 0, $textBytes.Length)
-        }
-        if ($null -ne $sha256) {
-            $sha256.Dispose()
-        }
-    }
+    return (ConvertTo-LapsCredential `
+        -RequestedHostname $hostname `
+        -LapsResults $lapsResults `
+        -FallbackAccount $config.UserForConnect)
 }
 
 function Invoke-OwnedClipboardCleanup {
@@ -616,27 +496,12 @@ function Connect-RDP {
             return
         }
 
-        $driveStoreRedirect = if ($redirectDrive) { 'C:\;' } else { '' }
         $rdpFileName = '{0}.rdp' -f [guid]::NewGuid().ToString('N')
         $rdpFile = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath $rdpFileName
-        $rdpContent = @"
-screen mode id:i:2
-use multimon:i:0
-session bpp:i:32
-winposstr:s:0,1,0,0,800,600
-compression:i:1
-keyboardhook:i:2
-audiomode:i:0
-redirectprinters:i:0
-redirectclipboard:i:1
-redirectsmartcards:i:0
-drivestoredirect:s:$driveStoreRedirect
-full address:s:$hostname
-username:s:$user
-prompt for credentials:i:0
-authentication level:i:2
-enablecredsspsupport:i:1
-"@
+        $rdpContent = New-RdpFileContent `
+            -Hostname $hostname `
+            -Username $user `
+            -RedirectDrive $redirectDrive
         [System.IO.File]::WriteAllText(
             $rdpFile,
             $rdpContent,
@@ -932,10 +797,9 @@ $ConnectButton.Add_Click({
         return
     }
 
-    if (
-        $null -eq $script:RetrievedCredential -or
-        $script:RetrievedCredential.RequestedHostname -cne $hostname
-    ) {
+    if (-not (Test-RetrievedCredentialMatchesHostname `
+        -Credential $script:RetrievedCredential `
+        -Hostname $hostname)) {
         $retrievedCredential = $null
         try {
             Clear-RetrievedCredential
