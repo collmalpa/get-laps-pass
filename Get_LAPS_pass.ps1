@@ -287,39 +287,174 @@ try {
 
 # ──────── FUNCTIONS ────────
 
-function Get-LapsPassword {
-    param ([string]$hostname)
+function Get-LapsErrorMessage {
+    param ([string]$category)
 
-    $lapsResults = @(
-        Get-LapsADPassword -Identity $hostname -AsPlainText -ErrorAction Stop
-    )
-
-    if ($lapsResults.Count -ne 1 -or [string]::IsNullOrEmpty($lapsResults[0].Password)) {
-        throw (New-Object System.InvalidOperationException(
-            "The LAPS query did not return exactly one usable password."))
+    switch ($category) {
+        'ModuleUnavailable' {
+            return "The Windows LAPS PowerShell module is unavailable."
+        }
+        'ComputerNotFound' {
+            return "The computer was not found in Active Directory."
+        }
+        'AccessDenied' {
+            return "You are not authorized to read or decrypt this LAPS password."
+        }
+        'PasswordUnavailable' {
+            return "The LAPS password is unavailable or could not be decrypted."
+        }
+        default {
+            return "An unexpected error occurred while retrieving the LAPS credential."
+        }
     }
-
-    return [string]$lapsResults[0].Password
 }
 
-function Clear-RetrievedPassword {
-    $script:RetrievedHostname = $null
-    $script:RetrievedPassword = $null
+function New-LapsRetrievalException {
+    param ([string]$category)
+
+    $exception = New-Object System.InvalidOperationException(
+        (Get-LapsErrorMessage -category $category))
+    $exception.Data['LapsErrorCategory'] = $category
+    return $exception
+}
+
+function Get-LapsExceptionCategory {
+    param ([System.Management.Automation.ErrorRecord]$errorRecord)
+
+    $exception = $errorRecord.Exception
+    while ($null -ne $exception) {
+        $exceptionTypeName = $exception.GetType().FullName
+        if ($exceptionTypeName -eq 'System.Management.Automation.CommandNotFoundException') {
+            return 'ModuleUnavailable'
+        }
+        if ($exceptionTypeName -eq 'Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException') {
+            return 'ComputerNotFound'
+        }
+        if (
+            $exception -is [System.UnauthorizedAccessException] -or
+            $exception -is [System.Security.SecurityException] -or
+            $exception.HResult -eq -2147024891
+        ) {
+            return 'AccessDenied'
+        }
+
+        $exception = $exception.InnerException
+    }
+
+    $errorCategory = [string]$errorRecord.CategoryInfo.Category
+    switch ($errorCategory) {
+        'ObjectNotFound' {
+            return 'ComputerNotFound'
+        }
+        'PermissionDenied' {
+            return 'AccessDenied'
+        }
+        'SecurityError' {
+            return 'AccessDenied'
+        }
+    }
+
+    if ($errorRecord.FullyQualifiedErrorId -eq 'CommandNotFoundException') {
+        return 'ModuleUnavailable'
+    }
+
+    return 'Unexpected'
+}
+
+function Show-LapsRetrievalError {
+    param ([System.Management.Automation.ErrorRecord]$errorRecord)
+
+    $category = 'Unexpected'
+    if (
+        $null -ne $errorRecord.Exception -and
+        $errorRecord.Exception.Data.Contains('LapsErrorCategory')
+    ) {
+        $category = [string]$errorRecord.Exception.Data['LapsErrorCategory']
+    }
+
+    [void][System.Windows.Forms.MessageBox]::Show(
+        (Get-LapsErrorMessage -category $category),
+        "LAPS Error",
+        "OK",
+        "Error")
+}
+
+function Get-LapsCredential {
+    param ([string]$hostname)
+
+    try {
+        $lapsCommand = Get-Command `
+            -Name 'Get-LapsADPassword' `
+            -CommandType Cmdlet `
+            -ErrorAction Stop
+    } catch {
+        throw (New-LapsRetrievalException -category 'ModuleUnavailable')
+    }
+
+    if ($null -eq $lapsCommand) {
+        throw (New-LapsRetrievalException -category 'ModuleUnavailable')
+    }
+    $lapsCommand = $null
+
+    try {
+        $lapsResults = @(
+            Get-LapsADPassword -Identity $hostname -AsPlainText -ErrorAction Stop
+        )
+    } catch {
+        $category = Get-LapsExceptionCategory -errorRecord $_
+        throw (New-LapsRetrievalException -category $category)
+    }
+
+    if ($lapsResults.Count -eq 0) {
+        throw (New-LapsRetrievalException -category 'ComputerNotFound')
+    }
+    if ($lapsResults.Count -ne 1) {
+        throw (New-LapsRetrievalException -category 'Unexpected')
+    }
+
+    $lapsResult = $lapsResults[0]
+    $decryptionStatus = [string]$lapsResult.DecryptionStatus
+    if ($decryptionStatus -eq 'Unauthorized') {
+        throw (New-LapsRetrievalException -category 'AccessDenied')
+    }
+    if ($decryptionStatus -notin @('Success', 'NotApplicable')) {
+        throw (New-LapsRetrievalException -category 'PasswordUnavailable')
+    }
+    if ([string]::IsNullOrEmpty([string]$lapsResult.Password)) {
+        throw (New-LapsRetrievalException -category 'PasswordUnavailable')
+    }
+
+    $lapsAccount = [string]$lapsResult.Account
+    if ([string]::IsNullOrWhiteSpace($lapsAccount)) {
+        $rdpAccount = $config.UserForConnect.Trim()
+        $accountSource = 'ConfigFallback'
+    } else {
+        $rdpAccount = $lapsAccount.Trim()
+        $accountSource = 'LAPS'
+    }
+
+    return [pscustomobject]@{
+        RequestedHostname = $hostname
+        LapsResult = $lapsResult
+        RdpAccount = $rdpAccount
+        AccountSource = $accountSource
+        ExpirationTimestamp = $lapsResult.ExpirationTimestamp
+    }
+}
+
+function Clear-RetrievedCredential {
+    $script:RetrievedCredential = $null
 
     if ($null -ne $PassOutput) {
         $PassOutput.Clear()
     }
 }
 
-function Set-RetrievedPassword {
-    param (
-        [string]$hostname,
-        [string]$password
-    )
+function Set-RetrievedCredential {
+    param ([psobject]$credential)
 
-    $script:RetrievedHostname = $hostname
-    $script:RetrievedPassword = $password
-    $PassOutput.Text = $password
+    $script:RetrievedCredential = $credential
+    $PassOutput.Text = [string]$credential.LapsResult.Password
 }
 
 function Validate-Hostname {
@@ -335,11 +470,12 @@ function Validate-Hostname {
 function Connect-RDP {
     param (
         [string]$hostname,
+        [string]$account,
         [string]$password,
         [bool]$redirectDrive
     )
 
-    $user = "$hostname\$($config.UserForConnect)"
+    $user = "$hostname\$account"
     $credentialTarget = "TERMSRV/$hostname"
     $credentialMarker = $null
     $rdpFile = $null
@@ -439,8 +575,7 @@ enablecredsspsupport:i:1
 
 # ──────── FORM DESIGN ────────
 
-$script:RetrievedHostname = $null
-$script:RetrievedPassword = $null
+$script:RetrievedCredential = $null
 
 $Form = New-Object System.Windows.Forms.Form
 $Form.ClientSize = '305,150'
@@ -493,20 +628,16 @@ $StartButton.Add_Click({
         return
     }
 
-    $password = $null
+    $retrievedCredential = $null
     try {
-        Clear-RetrievedPassword
-        $password = Get-LapsPassword -hostname $hostname
-        Set-RetrievedPassword -hostname $hostname -password $password
+        Clear-RetrievedCredential
+        $retrievedCredential = Get-LapsCredential -hostname $hostname
+        Set-RetrievedCredential -credential $retrievedCredential
     } catch {
-        Clear-RetrievedPassword
-        [void][System.Windows.Forms.MessageBox]::Show(
-            "Unable to retrieve the LAPS password. Verify the hostname, module availability, connectivity, and permissions.",
-            "LAPS Error",
-            "OK",
-            "Error")
+        Clear-RetrievedCredential
+        Show-LapsRetrievalError -errorRecord $_
     } finally {
-        $password = $null
+        $retrievedCredential = $null
     }
 })
 $Form.Controls.Add($StartButton)
@@ -540,8 +671,8 @@ $PassOutput = [System.Windows.Forms.TextBox]@{
 $Form.Controls.Add($PassOutput)
 
 $InputTextbox.Add_TextChanged({
-    if ($null -ne $script:RetrievedHostname -or $null -ne $script:RetrievedPassword) {
-        Clear-RetrievedPassword
+    if ($null -ne $script:RetrievedCredential) {
+        Clear-RetrievedCredential
     }
 })
 
@@ -574,24 +705,20 @@ $ConnectButton.Add_Click({
     }
 
     if (
-        [string]::IsNullOrEmpty($script:RetrievedPassword) -or
-        $script:RetrievedHostname -cne $hostname
+        $null -eq $script:RetrievedCredential -or
+        $script:RetrievedCredential.RequestedHostname -cne $hostname
     ) {
-        $password = $null
+        $retrievedCredential = $null
         try {
-            Clear-RetrievedPassword
-            $password = Get-LapsPassword -hostname $hostname
-            Set-RetrievedPassword -hostname $hostname -password $password
+            Clear-RetrievedCredential
+            $retrievedCredential = Get-LapsCredential -hostname $hostname
+            Set-RetrievedCredential -credential $retrievedCredential
         } catch {
-            Clear-RetrievedPassword
-            [void][System.Windows.Forms.MessageBox]::Show(
-                "Unable to retrieve the LAPS password. Verify the hostname, module availability, connectivity, and permissions.",
-                "LAPS Error",
-                "OK",
-                "Error")
+            Clear-RetrievedCredential
+            Show-LapsRetrievalError -errorRecord $_
             return
         } finally {
-            $password = $null
+            $retrievedCredential = $null
         }
     }
 
@@ -604,11 +731,12 @@ $ConnectButton.Add_Click({
         return
     }
 
-    $connectionPassword = $script:RetrievedPassword
+    $connectionCredential = $script:RetrievedCredential
     try {
         Connect-RDP `
             -hostname $hostname `
-            -password $connectionPassword `
+            -account $connectionCredential.RdpAccount `
+            -password $connectionCredential.LapsResult.Password `
             -redirectDrive $EnableDriveCheckbox.Checked
     } catch {
         [void][System.Windows.Forms.MessageBox]::Show(
@@ -617,13 +745,13 @@ $ConnectButton.Add_Click({
             "OK",
             "Error")
     } finally {
-        $connectionPassword = $null
-        Clear-RetrievedPassword
+        $connectionCredential = $null
+        Clear-RetrievedCredential
     }
 })
 $Form.Controls.Add($ConnectButton)
 
 # Activate and show form
 $Form.Add_Shown({$Form.Activate()})
-$Form.Add_FormClosed({ Clear-RetrievedPassword })
+$Form.Add_FormClosed({ Clear-RetrievedCredential })
 [void] $Form.ShowDialog()
