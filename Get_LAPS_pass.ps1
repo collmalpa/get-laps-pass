@@ -442,11 +442,117 @@ function Get-LapsCredential {
     }
 }
 
+function Get-ClipboardTextFingerprint {
+    param ([string]$text)
+
+    $textBytes = $null
+    $sha256 = $null
+    try {
+        $textBytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $fingerprint = $sha256.ComputeHash($textBytes)
+        return ,$fingerprint
+    } finally {
+        if ($null -ne $textBytes) {
+            [System.Array]::Clear($textBytes, 0, $textBytes.Length)
+        }
+        if ($null -ne $sha256) {
+            $sha256.Dispose()
+        }
+    }
+}
+
+function Invoke-OwnedClipboardCleanup {
+    param ([bool]$retryOnFailure = $false)
+
+    if ($null -ne $script:ClipboardCleanupTimer) {
+        $script:ClipboardCleanupTimer.Stop()
+    }
+
+    if ($null -eq $script:OwnedClipboardFingerprint) {
+        $script:ClipboardCleanupRetryCount = 0
+        return $true
+    }
+
+    $currentClipboardText = $null
+    $currentFingerprint = $null
+    try {
+        if ([System.Windows.Forms.Clipboard]::ContainsText(
+            [System.Windows.Forms.TextDataFormat]::UnicodeText)) {
+            $currentClipboardText = [System.Windows.Forms.Clipboard]::GetText(
+                [System.Windows.Forms.TextDataFormat]::UnicodeText)
+            $currentFingerprint = Get-ClipboardTextFingerprint -text $currentClipboardText
+
+            $fingerprintsMatch =
+                $script:OwnedClipboardFingerprint.Length -eq $currentFingerprint.Length
+            if ($fingerprintsMatch) {
+                for ($index = 0; $index -lt $currentFingerprint.Length; $index++) {
+                    if (
+                        $script:OwnedClipboardFingerprint[$index] -ne
+                        $currentFingerprint[$index]
+                    ) {
+                        $fingerprintsMatch = $false
+                        break
+                    }
+                }
+            }
+
+            if ($fingerprintsMatch) {
+                [System.Windows.Forms.Clipboard]::Clear()
+            }
+        }
+    } catch {
+        if (
+            $retryOnFailure -and
+            $null -ne $script:ClipboardCleanupTimer -and
+            $script:ClipboardCleanupRetryCount -lt $script:ClipboardCleanupMaxRetries
+        ) {
+            $script:ClipboardCleanupRetryCount++
+            $script:ClipboardCleanupTimer.Interval = 1000
+            $script:ClipboardCleanupTimer.Start()
+        }
+
+        return $false
+    } finally {
+        $currentClipboardText = $null
+        if ($null -ne $currentFingerprint) {
+            [System.Array]::Clear($currentFingerprint, 0, $currentFingerprint.Length)
+            $currentFingerprint = $null
+        }
+    }
+
+    [System.Array]::Clear(
+        $script:OwnedClipboardFingerprint,
+        0,
+        $script:OwnedClipboardFingerprint.Length)
+    $script:OwnedClipboardFingerprint = $null
+    $script:ClipboardCleanupRetryCount = 0
+    if ($null -ne $script:ClipboardCleanupTimer) {
+        $script:ClipboardCleanupTimer.Interval = 30000
+    }
+
+    return $true
+}
+
 function Clear-RetrievedCredential {
     $script:RetrievedCredential = $null
 
-    if ($null -ne $PassOutput) {
+    if ($null -ne $PassOutput -and -not $PassOutput.IsDisposed) {
         $PassOutput.Clear()
+        $PassOutput.UseSystemPasswordChar = $true
+    }
+    if ($null -ne $RdpAccountOutput -and -not $RdpAccountOutput.IsDisposed) {
+        $RdpAccountOutput.Clear()
+    }
+    if ($null -ne $ExpirationOutput -and -not $ExpirationOutput.IsDisposed) {
+        $ExpirationOutput.Clear()
+    }
+    if ($null -ne $CopyButton -and -not $CopyButton.IsDisposed) {
+        $CopyButton.Enabled = $false
+    }
+    if ($null -ne $ShowPasswordButton -and -not $ShowPasswordButton.IsDisposed) {
+        $ShowPasswordButton.Enabled = $false
+        $ShowPasswordButton.Text = "Show"
     }
 }
 
@@ -455,6 +561,22 @@ function Set-RetrievedCredential {
 
     $script:RetrievedCredential = $credential
     $PassOutput.Text = [string]$credential.LapsResult.Password
+    $PassOutput.UseSystemPasswordChar = $true
+    $RdpAccountOutput.Text = '{0}\{1}' -f `
+        $credential.RequestedHostname,
+        $credential.RdpAccount
+
+    if ($null -eq $credential.ExpirationTimestamp) {
+        $ExpirationOutput.Text = "Not available"
+    } else {
+        $ExpirationOutput.Text = ([datetime]$credential.ExpirationTimestamp).ToString(
+            'g',
+            [System.Globalization.CultureInfo]::CurrentCulture)
+    }
+
+    $CopyButton.Enabled = $true
+    $ShowPasswordButton.Enabled = $true
+    $ShowPasswordButton.Text = "Show"
 }
 
 function Validate-Hostname {
@@ -576,9 +698,17 @@ enablecredsspsupport:i:1
 # ──────── FORM DESIGN ────────
 
 $script:RetrievedCredential = $null
+$script:OwnedClipboardFingerprint = $null
+$script:ClipboardCleanupRetryCount = 0
+$script:ClipboardCleanupMaxRetries = 3
+$script:ClipboardCleanupTimer = New-Object System.Windows.Forms.Timer
+$script:ClipboardCleanupTimer.Interval = 30000
+$script:ClipboardCleanupTimer.Add_Tick({
+    [void](Invoke-OwnedClipboardCleanup -retryOnFailure $true)
+})
 
 $Form = New-Object System.Windows.Forms.Form
-$Form.ClientSize = '305,150'
+$Form.ClientSize = '305,210'
 $Form.Text = "Get LAPS pass"
 $Form.FormBorderStyle = 'FixedSingle'
 $Form.StartPosition = "CenterScreen"
@@ -587,7 +717,7 @@ $Form.TopMost = $false
 
 # Enter/Escape key support
 $Form.Add_KeyDown({
-    if ($_.KeyCode -eq "Enter") { $StartButton.PerformClick() }
+    if ($_.KeyCode -eq "Enter") { $GetPasswordButton.PerformClick() }
     elseif ($_.KeyCode -eq "Escape") { $Form.Close() }
 })
 
@@ -610,14 +740,14 @@ $InputTextbox = [System.Windows.Forms.TextBox]@{
 $InputTextbox.SelectionStart = $InputTextbox.Text.Length
 $Form.Controls.Add($InputTextbox)
 
-# Start button
-$StartButton = [System.Windows.Forms.Button]@{
-    Text = "Start"
+# Get Password button
+$GetPasswordButton = [System.Windows.Forms.Button]@{
+    Text = "Get Password"
     Location = New-Object System.Drawing.Point(20,45)
     Size = New-Object System.Drawing.Size(120,26)
-    Font = New-Object System.Drawing.Font('Tahoma',12)
+    Font = New-Object System.Drawing.Font('Tahoma',11)
 }
-$StartButton.Add_Click({
+$GetPasswordButton.Add_Click({
     $hostname = $InputTextbox.Text.Trim()
     if ([string]::IsNullOrWhiteSpace($hostname)) {
         [void][System.Windows.Forms.MessageBox]::Show(
@@ -640,17 +770,81 @@ $StartButton.Add_Click({
         $retrievedCredential = $null
     }
 })
-$Form.Controls.Add($StartButton)
+$Form.Controls.Add($GetPasswordButton)
 
 # Copy button
-$copyButton = [System.Windows.Forms.Button]@{
+$CopyButton = [System.Windows.Forms.Button]@{
     Text = "Copy"
     Location = New-Object System.Drawing.Point(150,45)
-    Size = New-Object System.Drawing.Size(135,26)
-    Font = New-Object System.Drawing.Font('Tahoma',12)
+    Size = New-Object System.Drawing.Size(65,26)
+    Font = New-Object System.Drawing.Font('Tahoma',10)
+    Enabled = $false
 }
-$copyButton.Add_Click({ $PassOutput.Text | clip })
-$Form.Controls.Add($copyButton)
+$CopyButton.Add_Click({
+    if (
+        $null -eq $script:RetrievedCredential -or
+        [string]::IsNullOrEmpty(
+            [string]$script:RetrievedCredential.LapsResult.Password)
+    ) {
+        return
+    }
+
+    $copiedText = $null
+    $newFingerprint = $null
+    try {
+        $copiedText = [string]$script:RetrievedCredential.LapsResult.Password
+        $newFingerprint = Get-ClipboardTextFingerprint -text $copiedText
+        [System.Windows.Forms.Clipboard]::SetText($copiedText)
+
+        if ($null -ne $script:OwnedClipboardFingerprint) {
+            [System.Array]::Clear(
+                $script:OwnedClipboardFingerprint,
+                0,
+                $script:OwnedClipboardFingerprint.Length)
+        }
+        $script:OwnedClipboardFingerprint = $newFingerprint
+        $newFingerprint = $null
+        $script:ClipboardCleanupRetryCount = 0
+        $script:ClipboardCleanupTimer.Stop()
+        $script:ClipboardCleanupTimer.Interval = 30000
+        $script:ClipboardCleanupTimer.Start()
+    } catch {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "The clipboard is currently unavailable.",
+            "Clipboard Error",
+            "OK",
+            "Warning")
+    } finally {
+        $copiedText = $null
+        if ($null -ne $newFingerprint) {
+            [System.Array]::Clear($newFingerprint, 0, $newFingerprint.Length)
+            $newFingerprint = $null
+        }
+    }
+})
+$Form.Controls.Add($CopyButton)
+
+# Show/Hide Password button
+$ShowPasswordButton = [System.Windows.Forms.Button]@{
+    Text = "Show"
+    Location = New-Object System.Drawing.Point(220,45)
+    Size = New-Object System.Drawing.Size(65,26)
+    Font = New-Object System.Drawing.Font('Tahoma',10)
+    Enabled = $false
+}
+$ShowPasswordButton.Add_Click({
+    if ($null -eq $script:RetrievedCredential) {
+        return
+    }
+
+    $PassOutput.UseSystemPasswordChar = -not $PassOutput.UseSystemPasswordChar
+    $ShowPasswordButton.Text = if ($PassOutput.UseSystemPasswordChar) {
+        "Show"
+    } else {
+        "Hide"
+    }
+})
+$Form.Controls.Add($ShowPasswordButton)
 
 # Password label
 $PassLabel = [System.Windows.Forms.Label]@{
@@ -664,23 +858,57 @@ $Form.Controls.Add($PassLabel)
 # Password output textbox
 $PassOutput = [System.Windows.Forms.TextBox]@{
     ReadOnly = $true
+    UseSystemPasswordChar = $true
     Location = New-Object System.Drawing.Point(150,80)
     Size = New-Object System.Drawing.Size(135,25)
     Font = New-Object System.Drawing.Font('Tahoma',11)
 }
 $Form.Controls.Add($PassOutput)
 
+# Effective RDP account
+$RdpAccountLabel = [System.Windows.Forms.Label]@{
+    Text = "RDP account:"
+    Location = New-Object System.Drawing.Point(20,115)
+    Size = New-Object System.Drawing.Size(130,25)
+    Font = New-Object System.Drawing.Font('Tahoma',11)
+}
+$Form.Controls.Add($RdpAccountLabel)
+
+$RdpAccountOutput = [System.Windows.Forms.TextBox]@{
+    ReadOnly = $true
+    Location = New-Object System.Drawing.Point(150,110)
+    Size = New-Object System.Drawing.Size(135,25)
+    Font = New-Object System.Drawing.Font('Tahoma',10)
+}
+$Form.Controls.Add($RdpAccountOutput)
+
+# LAPS expiration timestamp
+$ExpirationLabel = [System.Windows.Forms.Label]@{
+    Text = "Expiration:"
+    Location = New-Object System.Drawing.Point(20,145)
+    Size = New-Object System.Drawing.Size(130,25)
+    Font = New-Object System.Drawing.Font('Tahoma',11)
+}
+$Form.Controls.Add($ExpirationLabel)
+
+$ExpirationOutput = [System.Windows.Forms.TextBox]@{
+    ReadOnly = $true
+    Location = New-Object System.Drawing.Point(150,140)
+    Size = New-Object System.Drawing.Size(135,25)
+    Font = New-Object System.Drawing.Font('Tahoma',10)
+}
+$Form.Controls.Add($ExpirationOutput)
+
 $InputTextbox.Add_TextChanged({
-    if ($null -ne $script:RetrievedCredential) {
-        Clear-RetrievedCredential
-    }
+    [void](Invoke-OwnedClipboardCleanup -retryOnFailure $true)
+    Clear-RetrievedCredential
 })
 
 # Drive redirection checkbox
 $EnableDriveCheckbox = [System.Windows.Forms.CheckBox]@{
     Text = "Redirect C:\"
     Checked = $true
-    Location = New-Object System.Drawing.Point(23, 115)
+    Location = New-Object System.Drawing.Point(23, 177)
     Size = New-Object System.Drawing.Size(120, 20)
     Font = New-Object System.Drawing.Font('Tahoma',11)
 }
@@ -689,7 +917,7 @@ $Form.Controls.Add($EnableDriveCheckbox)
 # Connect button
 $ConnectButton = [System.Windows.Forms.Button]@{
     Text = "Connect!"
-    Location = New-Object System.Drawing.Point(150,112)
+    Location = New-Object System.Drawing.Point(150,174)
     Size = New-Object System.Drawing.Size(135,26)
     Font = New-Object System.Drawing.Font('Tahoma',12)
 }
@@ -733,6 +961,7 @@ $ConnectButton.Add_Click({
 
     $connectionCredential = $script:RetrievedCredential
     try {
+        [void](Invoke-OwnedClipboardCleanup -retryOnFailure $true)
         Connect-RDP `
             -hostname $hostname `
             -account $connectionCredential.RdpAccount `
@@ -753,5 +982,22 @@ $Form.Controls.Add($ConnectButton)
 
 # Activate and show form
 $Form.Add_Shown({$Form.Activate()})
-$Form.Add_FormClosed({ Clear-RetrievedCredential })
+$Form.Add_FormClosing({
+    $clipboardCleanupSucceeded = Invoke-OwnedClipboardCleanup
+    if (-not $clipboardCleanupSucceeded) {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "The copied password could not be verified or cleared from the clipboard.",
+            "Clipboard Warning",
+            "OK",
+            "Warning")
+    }
+
+    if ($null -ne $script:ClipboardCleanupTimer) {
+        $script:ClipboardCleanupTimer.Stop()
+        $script:ClipboardCleanupTimer.Dispose()
+        $script:ClipboardCleanupTimer = $null
+    }
+
+    Clear-RetrievedCredential
+})
 [void] $Form.ShowDialog()
