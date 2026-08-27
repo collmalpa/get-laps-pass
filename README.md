@@ -1,165 +1,152 @@
 # Get-LAPS-pass
 
-Get-LAPS-pass is a small Windows PowerShell 5.1 WinForms utility for Service Desk workflows. It retrieves a Windows LAPS credential for a computer, displays the effective local account and password expiration, optionally shows or copies the password, and can start a Remote Desktop connection with that credential.
+Get-LAPS-pass is a compact Windows PowerShell 5.1 WinForms utility for Service Desk workflows. It retrieves a Windows LAPS credential, displays the effective local account and password expiration, supports controlled password copying, and can launch Remote Desktop with a temporary credential.
 
-> [!IMPORTANT]
-> `Get_LAPS_pass.ps1` is the authoritative current implementation. The tracked `Get_LAPS_pass.exe` is a legacy artifact that predates the current security and user-interface changes. Do not treat the EXE as the current release; it will remain legacy until a reproducible build process is available.
+![Get-LAPS-pass credential interface](GUI.png)
 
 ## Requirements
 
-- Windows 10 or Windows 11
-- Windows PowerShell 5.1
-- Windows LAPS PowerShell cmdlets, including `Get-LapsADPassword`
-- Permission to retrieve and decrypt the target computer's Windows LAPS password
-- Active Directory and DNS connectivity appropriate for the environment
-- The built-in Remote Desktop Connection client (`mstsc.exe`)
+Runtime requirements:
 
-The application does not install or import missing modules automatically.
+- Windows 10 or Windows 11;
+- Windows LAPS PowerShell cmdlets, including `Get-LapsADPassword`;
+- permission to read and decrypt the target computer's Windows LAPS password;
+- Active Directory and DNS connectivity appropriate for the environment;
+- the built-in Remote Desktop Connection client (`mstsc.exe`).
 
-## Installation and source-first usage
+Running the source directly requires Windows PowerShell 5.1. The application does not install or import missing modules automatically.
 
-1. Clone the repository:
+## Run from source
 
-   ```powershell
-   git clone https://github.com/collmalpa/laps-password-rdp-tool.git
-   cd laps-password-rdp-tool
-   ```
+Keep these files together in one directory:
 
-2. Create the local configuration:
+- `Get_LAPS_pass.ps1`;
+- `GetLapsPass.Core.psm1`;
+- a local `config.json`.
 
-   ```powershell
-   Copy-Item .\config.example.json .\config.json
-   ```
+Create the local configuration from the tracked template, edit it for the environment, and launch the script with Windows PowerShell 5.1:
 
-3. Edit `config.json` for the local environment.
+```powershell
+Copy-Item .\config.example.json .\config.json
+powershell.exe -NoProfile -File .\Get_LAPS_pass.ps1
+```
 
-4. Launch the authoritative script with Windows PowerShell 5.1:
+## Use a packaged release
 
-   ```powershell
-   powershell.exe -NoProfile -File .\Get_LAPS_pass.ps1
-   ```
+Release binaries are distributed through versioned release packages rather than tracked in Git. `Get_LAPS_pass.exe` is produced by `build.ps1`.
 
-The bundled EXE is intentionally not advertised as a current build.
+1. Download `Get-LAPS-pass-2.0.0.zip` and its sibling `Get-LAPS-pass-2.0.0.zip.sha256` file.
+2. Verify the ZIP's SHA-256 hash against the `.sha256` file.
+3. Extract the ZIP.
+4. Keep `GetLapsPass.Core.psm1` beside `Get_LAPS_pass.exe`.
+5. Copy `config.example.json` to `config.json` in that same application directory and edit the local values.
+6. Run `Get_LAPS_pass.exe`.
+
+The package's `SHA256SUMS.txt` contains SHA-256 hashes for the release payload files. `config.json` is intentionally excluded from both Git and release packages.
 
 ## Configuration
 
-`config.json` is intentionally ignored by Git and must exist beside the script or application executable. The application resolves it relative to that application directory, not the process's current working directory.
-
-Start with `config.example.json`:
-
-```json
-{
-  "SearchTemplate": "",
-  "UserForConnect": "Administrator"
-}
-```
+`config.example.json` is the safe tracked template. The application requires a valid `config.json` beside the script or executable and resolves it from the application directory, not the process's current working directory.
 
 | Setting | Behavior |
 | --- | --- |
-| `SearchTemplate` | Prepopulates the hostname input. It may be an empty string. |
+| `SearchTemplate` | Prepopulates the hostname input and may be empty. |
 | `UserForConnect` | Supplies only the local RDP account name when Windows LAPS does not return a usable `Account` value. |
 
-`UserForConnect` is never a fallback for a missing, unavailable, unauthorized, or undecryptable password. A missing or malformed `config.json` produces a controlled startup error and the application does not continue.
+`UserForConnect` never substitutes for a missing, unauthorized, or undecryptable password. A missing or malformed configuration produces a controlled startup error.
 
-## Current UI behavior
+## Credential and UI behavior
 
-- **Get Password** retrieves the credential for the trimmed hostname.
-- The password is read-only and masked by default.
-- **Show/Hide** changes only password visibility.
+- **Get Password** retrieves exactly one Windows LAPS result for the trimmed hostname.
+- A non-empty Windows LAPS `Account` is used for RDP; `UserForConnect` is account-name fallback only.
+- The password is read-only and masked by default; **Show/Hide** changes only its visibility.
 - **Copy** is enabled only while a valid credential is loaded.
-- **RDP account** displays the effective `hostname\account` value.
-- **Expiration** displays the LAPS expiration timestamp using the current Windows culture, or `Not available` when a successful result has no timestamp.
-- **Redirect C:\** controls whether the generated RDP configuration requests local `C:\` drive redirection.
-- **Connect** remains available without first pressing **Get Password**; it retrieves a valid credential automatically when required.
+- **RDP account** shows the effective `hostname\account` value.
+- **Expiration** shows `ExpirationTimestamp`, or `Not available` when the successful result has no timestamp.
+- **Connect** can retrieve a credential automatically when one is not already loaded for the current hostname.
 
-Changing the hostname invalidates and clears the displayed credential. Credential-related UI state is also cleared after the RDP lifecycle and when the form closes.
-
-## Windows LAPS behavior
-
-The application requests exactly one result with:
-
-```powershell
-Get-LapsADPassword -Identity <hostname> -AsPlainText -ErrorAction Stop
-```
-
-The complete returned LAPS result is retained in application memory for the active credential lifecycle:
-
-- A non-empty Windows LAPS `Account` value is used as the RDP local account.
-- `config.UserForConnect` is used only when `Account` is unavailable or whitespace.
-- `ExpirationTimestamp` is retained for display.
-- An unauthorized decryption status or a null/empty password is treated as failure.
-- Module, computer-not-found, access-denied, password-unavailable, and unexpected failures produce fixed, categorized messages instead of raw exception details.
-
-The application does not display complete LAPS result objects or sensitive directory metadata in errors.
-
-## RDP credential lifecycle
-
-For a connection, the application uses the built-in Windows Credential Manager API directly:
-
-- It works with a temporary `CRED_TYPE_GENERIC` credential.
-- The exact target is `TERMSRV/<hostname>`.
-- The credential uses session persistence.
-- A unique, non-secret ownership marker identifies the credential created for that connection.
-- Cleanup reads the current credential metadata and deletes it only when the marker still matches.
-- If an exact Generic credential already exists, Connect stops before launching RDP and leaves the saved credential untouched.
-- If another process changes the credential, the application leaves it untouched and shows a safe cleanup warning.
-
-The application attempts to remove its temporary credential during its normal `finally` cleanup path after MSTSC exits or an error occurs. Cleanup is not guaranteed after abrupt process termination, a crash, forced process kill, machine shutdown, or loss of the Windows logon session.
-
-## RDP file and redirection behavior
-
-Every connection uses a unique temporary `.rdp` file. Its relevant settings request:
-
-- a full-screen connection;
-- clipboard redirection;
-- no smart-card redirection;
-- only `C:\` drive redirection when **Redirect C:\** is checked;
-- no drive redirection when **Redirect C:\** is unchecked.
-
-The generated file contains connection settings and the effective username, but not the LAPS password. The application attempts to remove the file during its normal cleanup path.
-
-### Remote Desktop Connection security dialog
-
-Current Windows versions may show a Remote Desktop Connection security dialog when the unsigned temporary `.rdp` file is opened, including an unknown-publisher warning and approval choices for requested local-resource redirection. This is expected. Get-LAPS-pass intentionally does not suppress the dialog or bypass Windows security controls.
-
-The user must review and approve the requested **Clipboard** and, when enabled, **Drives** redirection. Approval cannot expand the request beyond the generated settings: drive redirection remains limited to `C:\`, or disabled, according to the checkbox.
+Changing the hostname clears the loaded credential and displayed fields. Credential state is also cleared after the RDP lifecycle and when the form closes. Passwords and complete LAPS results are not written to logs or configuration files.
 
 ## Clipboard behavior
 
-**Copy** uses the WinForms clipboard API. For cleanup ownership, the application retains only an in-memory SHA-256 fingerprint of the exact copied text; it does not keep a second long-lived plaintext clipboard-password value.
+After **Copy**, the application retains an in-memory SHA-256 fingerprint of the copied value. After 30 seconds it clears the clipboard only if the current clipboard text still matches that fingerprint. Content copied later by the user or another application is left untouched.
 
-After 30 seconds, the application reads the current clipboard and clears it only when its fingerprint still matches the value copied by Get-LAPS-pass. If the user or another application has copied something else, that content is left untouched.
+Ownership-verified cleanup is also attempted when the hostname changes, before RDP starts, and when the form closes. Clipboard access can be temporarily unavailable, so cleanup is best-effort and never blindly clears unverified content.
 
-Ownership-verified cleanup is also attempted when the hostname changes, immediately before the blocking RDP launch, and while the form is closing. Clipboard access can be temporarily unavailable, so cleanup is best-effort, uses bounded short timer retries where applicable, and never blindly clears unverified clipboard content.
+## RDP and temporary credential lifecycle
 
-## Limitations
+Each connection uses:
 
-- Unsigned temporary RDP files may show the expected Windows security warning.
-- MSTSC is launched synchronously, so the application UI remains blocked during the RDP lifecycle.
-- An existing exact Generic `TERMSRV/<hostname>` credential blocks the connection and must be handled manually.
-- In-process credential, RDP-file, and clipboard cleanup cannot be guaranteed after abrupt termination.
-- Clipboard cleanup is best-effort when another process temporarily owns the Windows clipboard.
-- The tracked `Get_LAPS_pass.exe` is legacy and does not represent the current script until reproducible build automation is established.
+- the exact Generic Credential Manager target `TERMSRV/<hostname>`;
+- a unique non-secret ownership marker on the temporary session credential;
+- a unique temporary `.rdp` file containing connection settings and username, but not the password;
+- full-screen RDP with clipboard redirection enabled and smart-card redirection disabled;
+- `C:\` drive redirection only when **Redirect C:\** is checked.
 
-## Repository structure
+If a Generic credential already exists for the exact target, the application does not modify it or launch RDP. During normal `finally` cleanup, the temporary credential is deleted only if its ownership marker still matches, and the temporary `.rdp` file is removed. A credential changed by another process is left untouched.
+
+MSTSC is launched synchronously. Normal cleanup runs after it exits or when an error occurs, but in-process cleanup cannot be guaranteed after a crash, forced termination, shutdown, or loss of the Windows logon session.
+
+### Remote Desktop security dialog
+
+Starting with the April 2026 Windows security update, opening the unsigned temporary `.rdp` file can show the Remote Desktop Connection security dialog with **Unknown publisher** and approval choices for requested local-resource redirections. This is expected. Get-LAPS-pass does not suppress the dialog or bypass Windows security controls.
+
+The user must review the requested clipboard and, when enabled, drive redirection before connecting.
+
+## Reproducible build
+
+The release build requires an x64 Windows PowerShell 5.1 process and these exact module versions:
+
+- PS2EXE `1.0.18`;
+- Pester `3.4.0`;
+- PSScriptAnalyzer `1.25.0`.
+
+The build does not install or update modules. From the repository root, run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+```
+
+The fail-closed workflow verifies source inputs, runs the offline Pester suite, runs PSScriptAnalyzer with the project settings, builds the x64 no-console executable, validates the package, and generates SHA-256 manifests.
+
+The workflow pins these tool versions and reproduces the same build, validation, packaging, and hashing process. PS2EXE/CodeDOM does not guarantee byte-for-byte identical executable output across separate builds, and ZIP files likewise must not be assumed to have identical SHA-256 hashes. `SHA256SUMS.txt` and the ZIP `.sha256` file authenticate the artifacts produced by that specific release build.
+
+For v2.0.0 the output is:
+
+```text
+dist/
+├── Get-LAPS-pass-2.0.0/
+│   ├── Get_LAPS_pass.exe
+│   ├── GetLapsPass.Core.psm1
+│   ├── config.example.json
+│   ├── README.md
+│   ├── LICENSE
+│   └── SHA256SUMS.txt
+├── Get-LAPS-pass-2.0.0.zip
+└── Get-LAPS-pass-2.0.0.zip.sha256
+```
+
+The build never copies a local `config.json`. The ignored `dist/` directory contains generated release artifacts and should not be committed.
+
+## Repository layout
 
 ```text
 get-laps-pass/
 ├── .gitignore
 ├── AGENTS.md
+├── build.ps1
 ├── config.example.json
 ├── Get_LAPS_pass.ps1
-├── Get_LAPS_pass.exe       # legacy artifact
-├── GUI.png                 # obsolete screenshot; replacement pending
+├── GetLapsPass.Core.psm1
+├── GUI.png
 ├── LICENSE
-└── README.md
+├── PSScriptAnalyzerSettings.psd1
+├── README.md
+└── tests/
+    └── GetLapsPass.Core.Tests.ps1
 ```
 
-A local `config.json` must be created beside the script/application. It is intentionally ignored and is not part of the tracked repository layout.
-
-## Screenshot status
-
-`GUI.png` is retained for now but shows an obsolete interface and is not presented as the current UI. A sanitized screenshot of the current interface will be supplied manually in a later update.
+The repository contains source and build workflow only. Generated executables belong in versioned release packages.
 
 ## License
 
