@@ -1,3 +1,11 @@
+<#
+.SYNOPSIS
+Tests whether an application configuration contains the required values.
+.PARAMETER Configuration
+The configuration object to validate.
+.OUTPUTS
+System.Boolean.
+#>
 function Test-GetLapsPassConfiguration {
     param ([AllowNull()][psobject]$Configuration)
 
@@ -15,6 +23,14 @@ function Test-GetLapsPassConfiguration {
     )
 }
 
+<#
+.SYNOPSIS
+Gets a fixed user-facing message for a LAPS error category.
+.PARAMETER Category
+The LAPS error category.
+.OUTPUTS
+System.String.
+#>
 function Get-LapsErrorMessage {
     param ([string]$Category)
 
@@ -37,7 +53,19 @@ function Get-LapsErrorMessage {
     }
 }
 
+<#
+.SYNOPSIS
+Creates a safely categorized LAPS retrieval exception.
+.PARAMETER Category
+The LAPS error category to attach to the exception.
+.OUTPUTS
+System.InvalidOperationException.
+#>
 function New-LapsRetrievalException {
+    [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions',
+        '',
+        Justification = 'Constructs and returns only an in-memory exception.')]
     param ([string]$Category)
 
     $exception = New-Object System.InvalidOperationException(
@@ -46,6 +74,14 @@ function New-LapsRetrievalException {
     return $exception
 }
 
+<#
+.SYNOPSIS
+Classifies a PowerShell error record into a stable LAPS error category.
+.PARAMETER ErrorRecord
+The error record raised while preparing or performing LAPS retrieval.
+.OUTPUTS
+System.String.
+#>
 function Get-LapsExceptionCategory {
     param ([System.Management.Automation.ErrorRecord]$ErrorRecord)
 
@@ -89,6 +125,16 @@ function Get-LapsExceptionCategory {
     return 'Unexpected'
 }
 
+<#
+.SYNOPSIS
+Selects the effective RDP account from a LAPS result or configuration fallback.
+.PARAMETER LapsResult
+The single Windows LAPS result.
+.PARAMETER FallbackAccount
+The account name to use when the LAPS result has no account value.
+.OUTPUTS
+System.Management.Automation.PSCustomObject.
+#>
 function Resolve-LapsAccountSelection {
     param (
         [psobject]$LapsResult,
@@ -110,6 +156,18 @@ function Resolve-LapsAccountSelection {
     }
 }
 
+<#
+.SYNOPSIS
+Validates and converts one Windows LAPS result into application credential state.
+.PARAMETER RequestedHostname
+The hostname for which the LAPS result was requested.
+.PARAMETER LapsResults
+The Windows LAPS results to validate.
+.PARAMETER FallbackAccount
+The account name to use when the LAPS result has no account value.
+.OUTPUTS
+System.Management.Automation.PSCustomObject.
+#>
 function ConvertTo-LapsCredential {
     param (
         [string]$RequestedHostname,
@@ -150,20 +208,46 @@ function ConvertTo-LapsCredential {
     }
 }
 
+<#
+.SYNOPSIS
+Tests whether retrieved application state belongs to an exact hostname.
+.PARAMETER RetrievedState
+The retrieved application credential state.
+.PARAMETER Hostname
+The hostname to compare with the state binding.
+.OUTPUTS
+System.Boolean.
+#>
 function Test-RetrievedCredentialMatchesHostname {
     param (
-        [AllowNull()][psobject]$Credential,
+        [AllowNull()][psobject]$RetrievedState,
         [string]$Hostname
     )
 
-    if ($null -eq $Credential) {
+    if ($null -eq $RetrievedState) {
         return $false
     }
 
-    return $Credential.RequestedHostname -ceq $Hostname
+    return $RetrievedState.RequestedHostname -ceq $Hostname
 }
 
+<#
+.SYNOPSIS
+Creates RDP file content for the requested connection settings.
+.PARAMETER Hostname
+The remote computer hostname.
+.PARAMETER Username
+The effective RDP username.
+.PARAMETER RedirectDrive
+Whether the local C drive is redirected.
+.OUTPUTS
+System.String.
+#>
 function New-RdpFileContent {
+    [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions',
+        '',
+        Justification = 'Constructs and returns only an in-memory string.')]
     param (
         [string]$Hostname,
         [string]$Username,
@@ -192,6 +276,14 @@ enablecredsspsupport:i:1
     return $rdpContent
 }
 
+<#
+.SYNOPSIS
+Computes a SHA-256 fingerprint for clipboard ownership verification.
+.PARAMETER Text
+The text to fingerprint.
+.OUTPUTS
+System.Byte[].
+#>
 function Get-ClipboardTextFingerprint {
     param ([string]$Text)
 

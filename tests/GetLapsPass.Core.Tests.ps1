@@ -9,6 +9,14 @@ $script:SyntheticPassword = 'SYNTHETIC-' + [guid]::NewGuid().ToString('N')
 $script:SyntheticExpiration = [datetime]'2030-01-02T03:04:05'
 
 function New-SyntheticLapsResult {
+    [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions',
+        '',
+        Justification = 'Constructs only an in-memory synthetic test object.')]
+    [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSAvoidUsingPlainTextForPassword',
+        '',
+        Justification = 'Uses only runtime-generated non-secret test data.')]
     param (
         [string]$DecryptionStatus = 'Success',
         [AllowNull()]$Password = $script:SyntheticPassword,
@@ -36,6 +44,10 @@ function Get-ThrownLapsCategory {
 }
 
 function New-SyntheticErrorRecord {
+    [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions',
+        '',
+        Justification = 'Constructs only an in-memory synthetic error record.')]
     param (
         [System.Exception]$Exception,
         [System.Management.Automation.ErrorCategory]$Category,
@@ -401,27 +413,27 @@ Describe 'Test-RetrievedCredentialMatchesHostname' {
     It 'matches the exact hostname' {
         $credential = [pscustomobject]@{ RequestedHostname = 'TEST-HOST-001' }
         Test-RetrievedCredentialMatchesHostname `
-            -Credential $credential `
+            -RetrievedState $credential `
             -Hostname 'TEST-HOST-001' | Should Be $true
     }
 
     It 'rejects a different hostname' {
         $credential = [pscustomobject]@{ RequestedHostname = 'TEST-HOST-001' }
         Test-RetrievedCredentialMatchesHostname `
-            -Credential $credential `
+            -RetrievedState $credential `
             -Hostname 'TEST-HOST-002' | Should Be $false
     }
 
     It 'rejects a case-only hostname difference' {
         $credential = [pscustomobject]@{ RequestedHostname = 'TEST-HOST-001' }
         Test-RetrievedCredentialMatchesHostname `
-            -Credential $credential `
+            -RetrievedState $credential `
             -Hostname 'test-host-001' | Should Be $false
     }
 
     It 'rejects a null credential' {
         Test-RetrievedCredentialMatchesHostname `
-            -Credential $null `
+            -RetrievedState $null `
             -Hostname 'TEST-HOST-001' | Should Be $false
     }
 }

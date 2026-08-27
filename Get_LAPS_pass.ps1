@@ -290,7 +290,7 @@ try {
     return
 }
 
-# ──────── FUNCTIONS ────────
+# -------- FUNCTIONS --------
 
 function Show-LapsRetrievalError {
     param ([System.Management.Automation.ErrorRecord]$errorRecord)
@@ -437,19 +437,23 @@ function Clear-RetrievedCredential {
 }
 
 function Set-RetrievedCredential {
-    param ([psobject]$credential)
+    [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions',
+        '',
+        Justification = 'Updates only in-memory application and UI state.')]
+    param ([psobject]$RetrievedState)
 
-    $script:RetrievedCredential = $credential
-    $PassOutput.Text = [string]$credential.LapsResult.Password
+    $script:RetrievedCredential = $RetrievedState
+    $PassOutput.Text = [string]$RetrievedState.LapsResult.Password
     $PassOutput.UseSystemPasswordChar = $true
     $RdpAccountOutput.Text = '{0}\{1}' -f `
-        $credential.RequestedHostname,
-        $credential.RdpAccount
+        $RetrievedState.RequestedHostname,
+        $RetrievedState.RdpAccount
 
-    if ($null -eq $credential.ExpirationTimestamp) {
+    if ($null -eq $RetrievedState.ExpirationTimestamp) {
         $ExpirationOutput.Text = "Not available"
     } else {
-        $ExpirationOutput.Text = ([datetime]$credential.ExpirationTimestamp).ToString(
+        $ExpirationOutput.Text = ([datetime]$RetrievedState.ExpirationTimestamp).ToString(
             'g',
             [System.Globalization.CultureInfo]::CurrentCulture)
     }
@@ -459,7 +463,7 @@ function Set-RetrievedCredential {
     $ShowPasswordButton.Text = "Show"
 }
 
-function Validate-Hostname {
+function Test-Hostname {
     param ([string]$hostname)
     try {
         Resolve-DnsName -Name $hostname -ErrorAction Stop | Out-Null
@@ -470,6 +474,10 @@ function Validate-Hostname {
 }
 
 function Connect-RDP {
+    [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSAvoidUsingPlainTextForPassword',
+        '',
+        Justification = 'Plaintext comes from Get-LapsADPassword -AsPlainText and is required by the existing Credential Manager integration.')]
     param (
         [string]$hostname,
         [string]$account,
@@ -560,7 +568,7 @@ function Connect-RDP {
     }
 }
 
-# ──────── FORM DESIGN ────────
+# -------- FORM DESIGN --------
 
 $script:RetrievedCredential = $null
 $script:OwnedClipboardFingerprint = $null
@@ -627,7 +635,7 @@ $GetPasswordButton.Add_Click({
     try {
         Clear-RetrievedCredential
         $retrievedCredential = Get-LapsCredential -hostname $hostname
-        Set-RetrievedCredential -credential $retrievedCredential
+        Set-RetrievedCredential -RetrievedState $retrievedCredential
     } catch {
         Clear-RetrievedCredential
         Show-LapsRetrievalError -errorRecord $_
@@ -798,13 +806,13 @@ $ConnectButton.Add_Click({
     }
 
     if (-not (Test-RetrievedCredentialMatchesHostname `
-        -Credential $script:RetrievedCredential `
+        -RetrievedState $script:RetrievedCredential `
         -Hostname $hostname)) {
         $retrievedCredential = $null
         try {
             Clear-RetrievedCredential
             $retrievedCredential = Get-LapsCredential -hostname $hostname
-            Set-RetrievedCredential -credential $retrievedCredential
+            Set-RetrievedCredential -RetrievedState $retrievedCredential
         } catch {
             Clear-RetrievedCredential
             Show-LapsRetrievalError -errorRecord $_
@@ -814,7 +822,7 @@ $ConnectButton.Add_Click({
         }
     }
 
-    if (-not (Validate-Hostname -hostname $hostname)) {
+    if (-not (Test-Hostname -hostname $hostname)) {
         [void][System.Windows.Forms.MessageBox]::Show(
             "Hostname '$hostname' not found in DNS.",
             "Connection Error",
